@@ -3,57 +3,70 @@ package main
 import (
 	"net/http"
 	"fmt"
-	
 	"encoding/json"
     "io/ioutil"
     "os"
+	"time"
 	"github.com/labstack/echo/v4"
+	// "go.mongodb.org/mongo-driver/bson"
+
+	"context"
+    "log"
+
+    "go.mongodb.org/mongo-driver/mongo"
+    "go.mongodb.org/mongo-driver/mongo/options"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
-func parseMap(aMap map[string]interface{}) {
-    for key, val := range aMap {
-		// fmt.Println("------------------in map------------------")
-        switch concreteVal := val.(type) {
-        case map[string]interface{}:
-            // fmt.Println(key)
-			if key=="total" {
-				fmt.Println(key, ":", concreteVal["confirmed"])
-			}
-            parseMap(val.(map[string]interface{}))
-        case []interface{}:
-            // fmt.Println(key)
-            parseArray(val.([]interface{}))
-        default:
-			if key=="total" {
-				fmt.Println(key, ":", concreteVal)
-			}
-        }
-		
-    }
+type MongoFields struct {
+	State string `bson:"state"`
+	TotalCases float64 `bson:"totalCases"`
 }
 
-func parseArray(anArray []interface{}) {
-	fmt.Println("------------------in array------------------")
-    for i, val := range anArray {
-        switch concreteVal := val.(type) {
-        case map[string]interface{}:
-            fmt.Println("Index:", i)
-            parseMap(val.(map[string]interface{}))
-        case []interface{}:
-            fmt.Println("Index:", i)
-            parseArray(val.([]interface{}))
-        default:
-            fmt.Println("Index", i, ":", concreteVal)
+type StateData struct {
+	ID     primitive.ObjectID `bson:"_id,omitempty"`
+	StateCases []MongoFields `bson:"stateCases" json:"stateCases"`
+}
 
-        }
-    }
+func Connect( mongoFiled StateData) {
+	ctx, _ := context.WithTimeout(context.Background(), 10*time.Second)
+	client, err := mongo.Connect(ctx, options.Client().ApplyURI("mongodb://localhost:27017"))
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println("Connected to MongoDB!")
+	defer client.Disconnect(ctx)
+
+	database := client.Database("covidCases")
+	stateCollection := database.Collection("stateData")
+	
+
+	fmt.Println("printing mongo data")
+	fmt.Println(mongoFiled)
+
+	// data := StateData{
+	// 	StateCases: []MongoFields{
+	// 		{
+	// 			State:"AN",
+	// 			TotalCases : 23124,
+	// 		},
+	// 		{
+	// 			State:"AN",
+	// 			TotalCases : 23124,
+	// 		},
+	// 	},
+	// }
+	// fmt.Println("printing data", data)
+	insertManyResult, err := stateCollection.InsertOne(ctx,mongoFiled)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Println("Inserted multiple documents: ", insertManyResult.InsertedID)
+	fmt.Println("Connection to MongoDB closed.")
 }
 
 func saveCovidData(c echo.Context) error {
-	// resp, err := http.Get("https://data.covid19india.org/v4/min/data.min.json")
-	// if err != nil {
-	// 	return err
-	// }
 
 	// Open our jsonFile
     jsonFile, err := os.Open("data.min.json")
@@ -70,44 +83,18 @@ func saveCovidData(c echo.Context) error {
     var result map[string]interface{}
     json.Unmarshal([]byte(byteValue), &result)
 
-	var resp = make(map[string]float64)
-	// parseMap(result)
-
-	// fmt.Print("\nall states json data\n\n")
-    // fmt.Println(result["AN"])
-
-
-	// json.Unmarshal([]byte(resp), &res)
-
-	// var y [2]string{"English", "Japanese"}
-
-	// dummy+json= { 
-	// 	"state" : "key",
-	// 	"count": value
-	// }
-
-	for key := range result {
-		// fmt.Println("------------------in map------------------")
-        // concreteVal := val.(type)
-		// fmt.Println(key, ":",result[key].(map[string]interface{})["total"].(map[string]interface{})["confirmed"])
-		// fmt.Println("------------------in array------------------")
-		
-		resp[key] = result[key].(map[string]interface{})["total"].(map[string]interface{})["confirmed"].(float64)
-		// fmt.Print("value  ",result[key].(map[string]interface{})["total"].(map[string]interface{})["confirmed"].(float64))
-    }
-
-	jsonStr, err := json.Marshal(resp)
-
-	if err != nil {
-        fmt.Printf("Error: %s", err.Error())
-    } else {
-        fmt.Println(string(jsonStr))
-    }
-
-		
-
+	docs:= []MongoFields{} 
+	doc:= StateData{} 
 	
-	return c.JSON(http.StatusOK, string(jsonStr))
+	for key := range result {		
+		n := MongoFields{State: key, TotalCases: result[key].(map[string]interface{})["total"].(map[string]interface{})["confirmed"].(float64)}
+        docs = append(docs,n)
+	}
+	doc.StateCases = docs
+	fmt.Println(docs)
+
+	Connect(doc )
+	return c.JSON(http.StatusOK, "success")
 }
 
 func getStateName(c echo.Context) error {
